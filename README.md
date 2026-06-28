@@ -5,10 +5,6 @@
 
 **KFSecurity** detects jailbreak, cloud phone, hook injection, debugger, root access, and app tampering on iOS devices. Multi-tier architecture: App Store-safe `Standard`, Enterprise `Enterprise`, and full-spectrum `Advanced`.
 
-> [中文文档](README_CN.md)
-
----
-
 ## Products
 
 | Product | Description | App Store |
@@ -18,8 +14,6 @@
 | `KFSecurityEnterprise` | Enterprise impl., dyld/getmntinfo/getifaddrs | No |
 | `KFSecurityAdvanced` | Advanced impl., ptrace/RWX/debug registers | No |
 | `KFSecurity` | Umbrella (Core + Standard) | Yes |
-
----
 
 ## Quick Start
 
@@ -37,13 +31,26 @@ targets: [
 ]
 ```
 
-### 2. Run detection
+### 2. Register via KFService (v3)
 
 ```swift
-import KFSecurity
+import KFService
+import KFSecurityStandard
 
-let provider = StandardSecurityProvider()
-let verdict = await provider.makeEngine().evaluate()
+// In App init
+ServiceContainer.shared.install(KFSecurityAssembly())
+
+// In App.task
+try await Engine.run(modules: [
+    KFSecurityStartupModule(),
+])
+```
+
+### 3. Run detection
+
+```swift
+let service = try ServiceContainer.shared.resolve(KFSecurityService.self)
+let verdict = await service.evaluate(configuration: .strict)
 
 if verdict.isRisky {
     print("Risk Level: \(verdict.level)   Score: \(verdict.score)")
@@ -53,8 +60,6 @@ if verdict.isRisky {
 }
 ```
 
----
-
 ## Choose your tier
 
 | Build Type | Package.swift Dependency | Code |
@@ -63,7 +68,35 @@ if verdict.isRisky {
 | Enterprise | `KFSecurityEnterprise` | `EnterpriseSecurityProvider()` |
 | Audit Tool | `KFSecurityAdvanced` | `AdvancedSecurityProvider()` |
 
----
+## KFSecurityService Protocol (v3)
+
+```swift
+public protocol KFSecurityService: AnyObject {
+    func initialize(config: SecurityConfiguration)
+    func unInit()
+
+    func evaluate(configuration: SecurityConfiguration) async -> SecurityVerdict
+    func evaluate(categories: Set<RiskCategory>, configuration: SecurityConfiguration) async -> SecurityVerdict
+}
+```
+
+## KFService Integration
+
+| Type | Role |
+|------|------|
+| `KFSecurityAssembly` | Implements `ServiceAssembly` — registers `KFSecurityService` → `StandardKFSecurityService` |
+| `KFSecurityStartupModule` | Implements `StartupModule` — provides `KFSecurityStartupTask` |
+
+```swift
+// Install (sync, in App init)
+ServiceContainer.shared.install(KFSecurityAssembly())
+
+// Override with custom impl — last write wins
+ServiceContainer.shared.register(KFSecurityService.self) { MySecurityService() }
+
+// Run (async, in App.task)
+try await Engine.run(modules: [KFSecurityStartupModule()])
+```
 
 ## Architecture
 
@@ -71,58 +104,41 @@ if verdict.isRisky {
 Sources/
 ├── KFSecurityCore/              ← Protocols + core types
 │   ├── Core/CoreTypes.swift         SecurityVerdict, RiskLevel, RiskSignal
-│   └── Protocols/                   7 detector protocols + SecurityProvider + SecurityEngine
+│   └── Protocols/                   7 detector protocols + SecurityProvider + KFSecurityService
 │       ├── DetectorProtocols.swift
-│       └── SecurityProvider.swift
-├── KFSecurityStandard/          ← Public APIs only
+│       ├── SecurityProvider.swift
+│       └── KFSecurityService.swift
+├── KFSecurityStandard/          ← Public APIs only + assembly + startup module
+│   ├── StandardKFSecurityService.swift
+│   ├── KFSecurityAssembly.swift
+│   ├── KFSecurityStartupModule.swift
+│   └── Detectors/
 ├── KFSecurityEnterprise/        ← +dyld/getmntinfo/getifaddrs
 ├── KFSecurityAdvanced/          ← +ptrace/RWX/debug registers
 └── KFSecurity/                  ← Umbrella (Core + Standard)
 ```
 
----
-
 ## Design Rationale
 
 **Protocol-oriented detector model.** Each risk dimension (jailbreak, hook injection, debugger, etc.) is a separate `Sendable` protocol, enabling compile-time safety and independent testing. Detection logic is isolated per category — adding a new check never touches existing code.
 
-**Tiered safety model.** Three implementation tiers (Standard → Enterprise → Advanced) are enforced at the module level, not via runtime flags. App Store builds link against `KFSecurityStandard` which uses only public Apple APIs. Advanced checks (ptrace, debug registers, RWX memory) live in separate modules that App Store review would flag — consumers opt in explicitly.
+**Tiered safety model.** Three implementation tiers (Standard → Enterprise → Advanced) are enforced at the module level, not via runtime flags. App Store builds link against `KFSecurityStandard` which uses only public Apple APIs.
 
 **Async-first design.** All detectors return `[RiskSignal]` asynchronously, allowing checks to run concurrently. The engine aggregates signals across categories with weighted scoring, producing a single `SecurityVerdict` with numeric score (0–100) and granular `RiskLevel`.
 
-**Pluggable provider pattern.** `SecurityProvider` is a protocol, not a concrete class. Consumers can compose custom detection strategies by implementing individual detector protocols or inheriting from `DefaultSecurityProvider` and overriding only the detectors they need.
-
----
+**Pluggable provider pattern.** `SecurityProvider` is a protocol, not a concrete class. Consumers can compose custom detection strategies by implementing individual detector protocols or inheriting from `DefaultSecurityProvider`.
 
 ## Detector Protocols
 
-All detection protocols follow the `-or` noun convention:
-
 ```swift
-public protocol JailbreakDetector: Sendable {
-    func detect() async -> [RiskSignal]
-}
-public protocol HookInjectionDetector: Sendable {
-    func detect() async -> [RiskSignal]
-}
-public protocol CloudPhoneDetector: Sendable {
-    func detect() async -> [RiskSignal]
-}
-public protocol DebuggerDetector: Sendable {
-    func detect() async -> [RiskSignal]
-}
-public protocol AppIntegrityDetector: Sendable {
-    func detect() async -> [RiskSignal]
-}
-public protocol RootAccessDetector: Sendable {
-    func detect() async -> [RiskSignal]
-}
-public protocol EnvironmentDetector: Sendable {
-    func detect() async -> [RiskSignal]
-}
+public protocol JailbreakDetector: Sendable    { func detect() async -> [RiskSignal] }
+public protocol HookInjectionDetector: Sendable { func detect() async -> [RiskSignal] }
+public protocol CloudPhoneDetector: Sendable    { func detect() async -> [RiskSignal] }
+public protocol DebuggerDetector: Sendable      { func detect() async -> [RiskSignal] }
+public protocol AppIntegrityDetector: Sendable  { func detect() async -> [RiskSignal] }
+public protocol RootAccessDetector: Sendable    { func detect() async -> [RiskSignal] }
+public protocol EnvironmentDetector: Sendable   { func detect() async -> [RiskSignal] }
 ```
-
----
 
 ## Key Types
 
@@ -138,21 +154,12 @@ public protocol SecurityProvider: Sendable {
     func makeEngine() -> SecurityEngine
 }
 
-public protocol SecurityEngine: Sendable {
-    func evaluate(configuration: SecurityConfiguration) async -> SecurityVerdict
-    func evaluate(categories: Set<RiskCategory>, configuration: SecurityConfiguration) async -> SecurityVerdict
-}
-
 public enum RiskLevel: Int, Comparable, Codable, Sendable {
     case none = 0, low = 1, medium = 2, high = 3, critical = 4
 }
 ```
 
----
-
 ## Risk Scoring
-
-Scores are computed on a 0–100 scale:
 
 | Range | RiskLevel | Action |
 |-------|-----------|--------|
@@ -161,8 +168,6 @@ Scores are computed on a 0–100 scale:
 | 30–55 | `.medium` | Show warning |
 | 55–80 | `.high` | Restrict features |
 | 80–100 | `.critical` | Block access |
-
----
 
 ## Detection Capabilities
 
@@ -175,11 +180,9 @@ Scores are computed on a 0–100 scale:
 | dyld library scan | ❌ | ✅ | ✅ |
 | URL Scheme detection | ❌ | ✅ | ✅ |
 | DYLD env vars | ❌ | ❌ | ✅ |
-| dyld symbol integrity | ❌ | ❌ | ✅ |
 | NSClassFromString | ✅ | ✅ | ✅ |
 | dlsym hook detection | ❌ | ✅ | ✅ |
 | Function prologue integrity | ❌ | ❌ | ✅ |
-| RWX anonymous memory | ❌ | ❌ | ✅ |
 | Frida sockets | ❌ | ❌ | ✅ |
 | GPU name (Metal) | ✅ | ✅ | ✅ |
 | Hostname analysis | ✅ | ✅ | ✅ |
@@ -204,8 +207,6 @@ Scores are computed on a 0–100 scale:
 | Parent process check | ❌ | ❌ | ✅ |
 | Simulator detection | ✅ | ✅ | ✅ |
 
----
-
 ## Custom Implementation
 
 ```swift
@@ -216,68 +217,15 @@ class MyProvider: DefaultSecurityProvider {
         MyCustomJailbreakDetector()
     }
 }
-
-let verdict = await MyProvider().makeEngine().evaluate()
+let service = StandardKFSecurityService(provider: MyProvider())
+let verdict = await service.evaluate(configuration: .strict)
 ```
-
----
-
-## KFService Integration
-
-Register as a module for DI:
-
-```swift
-import KFService
-import KFSecurity
-
-struct SecurityModule: KFModule {
-    func register() {
-        KFServiceManager.register(SecurityProvider.self) {
-            StandardSecurityProvider()
-        }
-    }
-}
-
-// Later:
-let provider = KFServiceManager.resolve(SecurityProvider.self)
-```
-
----
 
 ## Requirements
 
 - iOS 15.0+
 - Swift 5.9+ (Xcode 15+)
 - SPM
-
----
-
-## Source Layout
-
-```
-Sources/
-├── KFSecurityCore/              ← Zero-dependency protocol layer
-│   ├── Core/
-│   │   └── CoreTypes.swift          RiskLevel, RiskCategory, RiskSignal, SecurityVerdict
-│   └── Protocols/
-│       ├── DetectorProtocols.swift  7 detector protocols
-│       └── SecurityProvider.swift   SecurityProvider + SecurityEngine + DefaultSecurityProvider
-├── KFSecurityStandard/          ← App Store-safe (public APIs only)
-│   ├── StandardSecurityProvider.swift
-│   └── Detectors/
-│       └── StandardDetectors.swift
-├── KFSecurityEnterprise/        ← Enterprise (dyld/getmntinfo/getifaddrs)
-│   ├── EnterpriseSecurityProvider.swift
-│   └── Detectors/
-│       └── EnterpriseDetectors.swift
-├── KFSecurityAdvanced/          ← Full-spectrum (ptrace/RWX/debug registers)
-│   └── Detectors/
-│       └── AdvancedDetectors.swift
-└── KFSecurity/                  ← Umbrella re-export (Core + Standard)
-    └── KFSecurity.swift
-```
-
----
 
 ## License
 
