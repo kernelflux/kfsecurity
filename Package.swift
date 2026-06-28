@@ -4,7 +4,8 @@ import PackageDescription
 let package = Package(
     name: "KFSecurity",
     platforms: [
-        .iOS(.v15),
+        .iOS(.v16),
+        .macOS(.v13),
     ],
     products: [
         .library(name: "KFSecurityCore",      targets: ["KFSecurityCore"]),
@@ -13,12 +14,15 @@ let package = Package(
         .library(name: "KFSecurityAdvanced",   targets: ["KFSecurityAdvanced"]),
         .library(name: "KFSecurity",           targets: ["KFSecurity"]),
     ],
+    dependencies: [
+        .package(path: "../kfservice"),
+    ],
     targets: [
         .target(name: "KFSecurityCore",
                 path: "Sources/KFSecurityCore",
                 swiftSettings: swiftSettings),
         .target(name: "KFSecurityStandard",
-                dependencies: ["KFSecurityCore"],
+                dependencies: ["KFSecurityCore", .product(name: "KFService", package: "KFService")],
                 path: "Sources/KFSecurityStandard",
                 swiftSettings: swiftSettings),
         .target(name: "KFSecurityEnterprise",
