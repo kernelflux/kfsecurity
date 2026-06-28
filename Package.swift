@@ -15,7 +15,7 @@ let package = Package(
         .library(name: "KFSecurity",           targets: ["KFSecurity"]),
     ],
     dependencies: [
-        .package(path: "../kfservice"),
+        .package(url: "https://github.com/kernelflux/kfservice.git", from: "1.0.0"),
     ],
     targets: [
         .target(name: "KFSecurityCore",
